@@ -132,6 +132,8 @@
       <button id="exportCsv" class="button">Exportar CSV</button>
       <input type="file" id="importCsv" accept=".csv" hidden />
       <button id="importButton" class="button">Importar CSV</button>
+      <button id="exportTimeTracking" class="button">Exportar Tempo de Tarefas</button>
+      <button id="exportDailyReport" class="button">Relatório de Ontem</button>
     </div>
 
     <div class="board">
@@ -151,6 +153,7 @@
   </div>
 
   <script>
+
     class KanbanBoard {
       constructor() {
         this.board = document.querySelector('.board');
@@ -167,6 +170,8 @@
         document.getElementById('addTask').addEventListener('click', () => this.handleAddTask());
         document.getElementById('exportCsv').addEventListener('click', () => this.handleExportCsv());
         document.getElementById('importButton').addEventListener('click', () => this.importCsvInput.click());
+        document.getElementById('exportTimeTracking').addEventListener('click', () => this.handleExportTimeTracking());
+        document.getElementById('exportDailyReport').addEventListener('click', () => this.handleExportDailyReport());
         this.importCsvInput.addEventListener('change', (e) => this.handleImportCsv(e));
         
         this.initializeDragAndDrop();
@@ -258,6 +263,54 @@
         this.downloadCSV(csvContent, 'kanban_tasks.csv');
       }
 
+      handleExportTimeTracking() {
+        const history = this.getTaskHistory();
+        const taskDurations = this.calculateTaskDuration(history);
+        const csvContent = this.convertToTimeTrackingCSV(taskDurations);
+        this.downloadCSV(csvContent, 'task_time_tracking.csv');
+      }
+
+      calculateTaskDuration(taskHistory) {
+        const taskDurations = {};
+        
+        taskHistory.forEach((entry) => {
+          const taskId = entry.id;
+          
+          if (!taskDurations[taskId]) {
+            taskDurations[taskId] = {
+              id: taskId,
+              task: entry.content,
+              problem: entry.problem,
+              result: entry.result,
+              inProgressStart: null,
+              totalDuration: 0
+            };
+          }
+
+          if (entry.column === 'In Progress') {
+            taskDurations[taskId].inProgressStart = new Date(entry.timestamp);
+          } else if (taskDurations[taskId].inProgressStart && 
+                    (entry.column === 'Done' || entry.column === 'To Do')) {
+            const endTime = new Date(entry.timestamp);
+            const startTime = taskDurations[taskId].inProgressStart;
+            const duration = endTime - startTime;
+            taskDurations[taskId].totalDuration += duration;
+            taskDurations[taskId].inProgressStart = null;
+          }
+        });
+
+        return Object.values(taskDurations);
+      }
+
+      formatDuration(milliseconds) {
+        const seconds = Math.floor(milliseconds / 1000);
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const remainingSeconds = seconds % 60;
+
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
+      }
+
       async handleImportCsv(event) {
         const file = event.target.files[0];
         if (!file) return;
@@ -307,7 +360,34 @@
         const rows = data.map(item => 
           [item.id, item.problem, item.content, item.result, item.timestamp, item.column]
         );
-        return [headers, ...rows].map(row => row.join(',')).join('\n');
+        return [headers, ...rows].map(row => 
+          row.map(cell => {
+            const cellStr = String(cell);
+            return cellStr.includes(';') || cellStr.includes('"') || cellStr.includes('\n') 
+              ? `"${cellStr.replace(/"/g, '""')}"` 
+              : cellStr;
+          }).join(';')
+        ).join('\n');
+      }
+
+      convertToTimeTrackingCSV(taskDurations) {
+        const headers = ['idtask', 'task', 'situacaoproblema', 'resultado', 'tempogasto'];
+        const rows = taskDurations.map(task => [
+          task.id,
+          task.task,
+          task.problem,
+          task.result,
+          this.formatDuration(task.totalDuration)
+        ]);
+
+        return [headers, ...rows].map(row => 
+          row.map(cell => {
+            const cellStr = String(cell);
+            return cellStr.includes(';') || cellStr.includes('"') || cellStr.includes('\n')
+              ? `"${cellStr.replace(/"/g, '""')}"` 
+              : cellStr;
+          }).join(';')
+        ).join('\n');
       }
 
       downloadCSV(content, filename) {
@@ -335,12 +415,50 @@
         this.problems = [];
 
         rows.forEach(row => {
-          const [id, problem, content, result, timestamp, column] = row.split(',');
-          if (id && content && column) {
-            history.push({ id, problem, content, result, timestamp, column });
+          const cells = [];
+          let currentCell = '';
+          let insideQuotes = false;
+          
+          for (let i = 0; i < row.length; i++) {
+            const char = row[i];
             
-            if (problem && !this.problems.find(p => p.problem === problem)) {
-              this.problems.push({ problem, expectedResult: result || '' });
+            if (char === '"') {
+              if (insideQuotes && row[i + 1] === '"') {
+                currentCell += '"';
+                i++;
+              } else {
+                insideQuotes = !insideQuotes;
+              }
+            } else if (char === ';' && !insideQuotes) {
+              cells.push(currentCell);
+              currentCell = '';
+            } else {
+              currentCell += char;
+            }
+          }
+          cells.push(currentCell); 
+          
+          const [id, problem, content, result, timestamp, column] = cells;
+          
+          if (id && content && column) {
+            const cleanContent = content.replace(/^"|"$/g, '');
+            const cleanProblem = problem.replace(/^"|"$/g, '');
+            const cleanResult = result.replace(/^"|"$/g, '');
+            
+            history.push({ 
+              id, 
+              problem: cleanProblem, 
+              content: cleanContent, 
+              result: cleanResult, 
+              timestamp, 
+              column 
+            });
+            
+            if (cleanProblem && !this.problems.find(p => p.problem === cleanProblem)) {
+              this.problems.push({ 
+                problem: cleanProblem, 
+                expectedResult: cleanResult || '' 
+              });
             }
           }
         });
@@ -378,6 +496,55 @@
         });
       }
 
+      handleExportDailyReport() {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStart = new Date(yesterday.setHours(0, 0, 0, 0));
+        const yesterdayEnd = new Date(yesterday.setHours(23, 59, 59, 999));
+
+        const history = this.getTaskHistory();
+        
+        const yesterdayMoves = history.filter(entry => {
+          const entryDate = new Date(entry.timestamp);
+          const isYesterday = entryDate >= yesterdayStart && entryDate <= yesterdayEnd;
+          const isValidColumn = entry.column === 'In Progress' || entry.column === 'Done';
+          return isYesterday && isValidColumn;
+        });
+
+        const problemGroups = yesterdayMoves.reduce((acc, entry) => {
+          if (!acc[entry.problem]) {
+            acc[entry.problem] = new Set();
+          }
+          acc[entry.problem].add(entry.content);
+          return acc;
+        }, {});
+
+        let reportText = '';
+        Object.entries(problemGroups).forEach(([problem, tasks]) => {
+          reportText += `- ${problem}\n`;
+          tasks.forEach(task => {
+            reportText += `\t- ${task}\n`;
+          });
+          reportText += '\n';
+        });
+
+        if (reportText.trim() === '') {
+          reportText = 'Nenhuma movimentação encontrada para o dia de ontem.';
+        }
+
+        this.downloadTextFile(reportText, 'relatorio_ontem.txt');
+      }
+
+      downloadTextFile(content, filename) {
+        const blob = new Blob([content], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+
       getTaskHistory() {
         return JSON.parse(localStorage.getItem('taskHistory')) || [];
       }
@@ -397,6 +564,7 @@
     }
 
     new KanbanBoard();
+
   </script>
 </body>
 </html>
