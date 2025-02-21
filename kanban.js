@@ -119,6 +119,7 @@ template.innerHTML = `
       <button id="importButton" class="button">Importar CSV</button>
       <button id="exportTimeTracking" class="button">Exportar Tempo de Tarefas</button>
       <button id="exportDailyReport" class="button">Relatório de Ontem</button>
+      <button id="exportTodayReport" class="button">Relatório de Hoje</button> 
     </div>
 
     <div class="board">
@@ -163,6 +164,7 @@ class KanbanBoard extends HTMLElement {
     this.shadowRoot.getElementById('importButton').addEventListener('click', () => this.importCsvInput.click());
     this.shadowRoot.getElementById('exportTimeTracking').addEventListener('click', () => this.handleExportTimeTracking());
     this.shadowRoot.getElementById('exportDailyReport').addEventListener('click', () => this.handleExportDailyReport());
+    this.shadowRoot.getElementById('exportTodayReport').addEventListener('click', () => this.handleExportTodayReport());
     this.importCsvInput.addEventListener('change', (e) => this.handleImportCsv(e));
     
     this.initializeDragAndDrop();
@@ -202,11 +204,12 @@ class KanbanBoard extends HTMLElement {
     const taskId = Date.now();
     const newTask = this.createTaskElement(taskContent, taskId, selectedProblem);
     const todoColumn = this.shadowRoot.querySelector('[data-column="To Do"] .kanban-items');
-    todoColumn.appendChild(newTask);
+    const firstTask = todoColumn.firstChild;
+    todoColumn.insertBefore(newTask, firstTask);
     
     this.logTaskChange(taskId, taskContent, 'To Do', selectedProblem);
     this.clearInputs([taskInput]);
-  }
+}
 
   createTaskElement(content, id, problem) {
     const task = document.createElement('div');
@@ -243,7 +246,8 @@ class KanbanBoard extends HTMLElement {
 
     if (newColumn !== oldColumn) {
       const targetContainer = targetColumn.querySelector('.kanban-items');
-      targetContainer.appendChild(task);
+      const firstTask = targetContainer.firstChild;
+      targetContainer.insertBefore(task, firstTask);
       this.logTaskChange(taskId, task.textContent, newColumn, task.dataset.problem);
     }
   }
@@ -498,6 +502,44 @@ class KanbanBoard extends HTMLElement {
     this.downloadTextFile(reportText, 'relatorio_ontem.txt');
   }
 
+  handleExportTodayReport() {
+    const today = new Date();
+    const todayStart = new Date(today.setHours(0, 0, 0, 0));
+    const todayEnd = new Date(today.setHours(23, 59, 59, 999));
+  
+    const history = this.getTaskHistory();
+    
+    const todayMoves = history.filter(entry => {
+      const entryDate = new Date(entry.timestamp);
+      const isToday = entryDate >= todayStart && entryDate <= todayEnd;
+      const isInProgress = entry.column === 'In Progress';
+      return isToday && isInProgress;
+    });
+  
+    const problemGroups = todayMoves.reduce((acc, entry) => {
+      if (!acc[entry.problem]) {
+        acc[entry.problem] = new Set();
+      }
+      acc[entry.problem].add(entry.content);
+      return acc;
+    }, {});
+  
+    let reportText = '';
+    Object.entries(problemGroups).forEach(([problem, tasks]) => {
+      reportText += `- ${problem}\n`;
+      tasks.forEach(task => {
+        reportText += `\t- ${task}\n`;
+      });
+      reportText += '\n';
+    });
+  
+    if (reportText.trim() === '') {
+      reportText = 'Nenhuma movimentação encontrada para hoje.';
+    }
+  
+    this.downloadTextFile(reportText, 'atividades_hoje.txt');
+  }
+
   downloadTextFile(content, filename) {
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -527,7 +569,11 @@ class KanbanBoard extends HTMLElement {
   }
 
   renderTasks(tasks) {
-    Object.values(tasks).forEach(({ id, content, column, problem }) => {
+    const sortedTasks = Object.values(tasks).sort((a, b) => {
+      return new Date(b.timestamp) - new Date(a.timestamp);
+    });
+  
+    sortedTasks.forEach(({ id, content, column, problem }) => {
       const columnElement = this.board.querySelector(`[data-column="${column}"] .kanban-items`);
       if (columnElement) {
         const task = this.createTaskElement(content, id, problem);
