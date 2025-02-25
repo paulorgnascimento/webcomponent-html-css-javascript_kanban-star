@@ -90,6 +90,16 @@ template.innerHTML = `
     .task.dragging {
       opacity: 0.5;
     }
+    
+    .task-content {
+      margin-bottom: 4px;
+    }
+    
+    .task-problem {
+      font-size: 12px;
+      color: #666;
+      font-style: italic;
+    }
 
     .actions {
       display: flex;
@@ -213,13 +223,20 @@ class KanbanBoard extends HTMLElement {
 
   createTaskElement(content, id, problem) {
     const task = document.createElement('div');
-    Object.assign(task, {
-      className: 'task',
-      draggable: true,
-      textContent: content
-    });
+    task.className = 'task';
+    task.draggable = true;
     task.dataset.id = id;
     task.dataset.problem = problem;
+
+    const taskContent = document.createElement('div');
+    taskContent.className = 'task-content';
+    taskContent.textContent = content;
+    task.appendChild(taskContent);
+    
+    const taskProblem = document.createElement('div');
+    taskProblem.className = 'task-problem';
+    taskProblem.textContent = `(${problem})`;
+    task.appendChild(taskProblem);
 
     task.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('text/plain', id);
@@ -248,7 +265,9 @@ class KanbanBoard extends HTMLElement {
       const targetContainer = targetColumn.querySelector('.kanban-items');
       const firstTask = targetContainer.firstChild;
       targetContainer.insertBefore(task, firstTask);
-      this.logTaskChange(taskId, task.textContent, newColumn, task.dataset.problem);
+      
+      const content = task.querySelector('.task-content').textContent;
+      this.logTaskChange(taskId, content, newColumn, task.dataset.problem);
     }
   }
 
