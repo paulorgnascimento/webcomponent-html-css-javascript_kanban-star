@@ -487,37 +487,68 @@ class KanbanBoard extends HTMLElement {
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStart = new Date(yesterday.setHours(0, 0, 0, 0));
     const yesterdayEnd = new Date(yesterday.setHours(23, 59, 59, 999));
-
+  
     const history = this.getTaskHistory();
+    const allTasks = this.getLatestTaskStates(history);
     
-    const yesterdayMoves = history.filter(entry => {
+    const yesterdayInProgress = history.filter(entry => {
       const entryDate = new Date(entry.timestamp);
       const isYesterday = entryDate >= yesterdayStart && entryDate <= yesterdayEnd;
-      const isValidColumn = entry.column === 'In Progress' || entry.column === 'Done';
-      return isYesterday && isValidColumn;
+      const isInProgress = entry.column === 'In Progress';
+      return isYesterday && isInProgress;
     });
-
-    const problemGroups = yesterdayMoves.reduce((acc, entry) => {
-      if (!acc[entry.problem]) {
-        acc[entry.problem] = new Set();
+  
+    const problemGroups = {};
+    
+    const uniqueProblems = new Set();
+    yesterdayInProgress.forEach(entry => uniqueProblems.add(entry.problem));
+    
+    uniqueProblems.forEach(problem => {
+      problemGroups[problem] = {
+        done: new Set(),
+        todo: new Set()
+      };
+    });
+    
+    yesterdayInProgress.forEach(entry => {
+      problemGroups[entry.problem].done.add(entry.content);
+    });
+    
+    Object.values(allTasks).forEach(task => {
+      if (task.column === 'To Do' && problemGroups[task.problem]) {
+        problemGroups[task.problem].todo.add(task.content);
       }
-      acc[entry.problem].add(entry.content);
-      return acc;
-    }, {});
-
+    });
+  
     let reportText = '';
     Object.entries(problemGroups).forEach(([problem, tasks]) => {
       reportText += `- ${problem}\n`;
-      tasks.forEach(task => {
-        reportText += `\t- ${task}\n`;
-      });
+      
+      reportText += `\t- O que foi feito?\n`;
+      if (tasks.done.size > 0) {
+        tasks.done.forEach(task => {
+          reportText += `\t\t- ${task}\n`;
+        });
+      } else {
+        reportText += `\t\t- Nenhuma tarefa concluída\n`;
+      }
+      
+      reportText += `\t- O que falta?\n`;
+      if (tasks.todo.size > 0) {
+        tasks.todo.forEach(task => {
+          reportText += `\t\t- ${task}\n`;
+        });
+      } else {
+        reportText += `\t\t- Nenhuma tarefa pendente\n`;
+      }
+      
       reportText += '\n';
     });
-
-    if (reportText.trim() === '') {
-      reportText = 'Nenhuma movimentação encontrada para o dia de ontem.';
+  
+    if (Object.keys(problemGroups).length === 0) {
+      reportText = 'Nenhuma atividade encontrada para o dia de ontem.';
     }
-
+  
     this.downloadTextFile(reportText, 'relatorio_ontem.txt');
   }
 
@@ -527,33 +558,64 @@ class KanbanBoard extends HTMLElement {
     const todayEnd = new Date(today.setHours(23, 59, 59, 999));
   
     const history = this.getTaskHistory();
+    const allTasks = this.getLatestTaskStates(history);
     
-    const todayMoves = history.filter(entry => {
+    const todayInProgress = history.filter(entry => {
       const entryDate = new Date(entry.timestamp);
       const isToday = entryDate >= todayStart && entryDate <= todayEnd;
       const isInProgress = entry.column === 'In Progress';
       return isToday && isInProgress;
     });
   
-    const problemGroups = todayMoves.reduce((acc, entry) => {
-      if (!acc[entry.problem]) {
-        acc[entry.problem] = new Set();
+    const problemGroups = {};
+    
+    const uniqueProblems = new Set();
+    todayInProgress.forEach(entry => uniqueProblems.add(entry.problem));
+    
+    uniqueProblems.forEach(problem => {
+      problemGroups[problem] = {
+        done: new Set(),
+        todo: new Set()
+      };
+    });
+    
+    todayInProgress.forEach(entry => {
+      problemGroups[entry.problem].done.add(entry.content);
+    });
+    
+    Object.values(allTasks).forEach(task => {
+      if (task.column === 'To Do' && problemGroups[task.problem]) {
+        problemGroups[task.problem].todo.add(task.content);
       }
-      acc[entry.problem].add(entry.content);
-      return acc;
-    }, {});
+    });
   
     let reportText = '';
     Object.entries(problemGroups).forEach(([problem, tasks]) => {
       reportText += `- ${problem}\n`;
-      tasks.forEach(task => {
-        reportText += `\t- ${task}\n`;
-      });
+      
+      reportText += `\t- O que foi feito?\n`;
+      if (tasks.done.size > 0) {
+        tasks.done.forEach(task => {
+          reportText += `\t\t- ${task}\n`;
+        });
+      } else {
+        reportText += `\t\t- Nenhuma tarefa concluída\n`;
+      }
+      
+      reportText += `\t- O que falta?\n`;
+      if (tasks.todo.size > 0) {
+        tasks.todo.forEach(task => {
+          reportText += `\t\t- ${task}\n`;
+        });
+      } else {
+        reportText += `\t\t- Nenhuma tarefa pendente\n`;
+      }
+      
       reportText += '\n';
     });
   
-    if (reportText.trim() === '') {
-      reportText = 'Nenhuma movimentação encontrada para hoje.';
+    if (Object.keys(problemGroups).length === 0) {
+      reportText = 'Nenhuma atividade encontrada para hoje.';
     }
   
     this.downloadTextFile(reportText, 'atividades_hoje.txt');
