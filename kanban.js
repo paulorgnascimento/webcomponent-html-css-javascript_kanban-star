@@ -340,7 +340,12 @@ class KanbanBoard extends HTMLElement {
 
   updateDropdown() {
     this.dropdown.innerHTML = '<option value="" disabled selected>Selecione uma Situação/Problema</option>';
-    this.problems.forEach(({ problem }) => {
+    
+    const sortedProblems = this.problems.sort((a, b) => 
+      a.problem.localeCompare(b.problem)
+    );
+
+    sortedProblems.forEach(({ problem }) => {
       const option = document.createElement('option');
       option.value = problem;
       option.textContent = problem;
