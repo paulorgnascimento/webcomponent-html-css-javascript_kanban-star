@@ -10,7 +10,7 @@ template.innerHTML = `
     }
 
     .container {
-      max-width: 1200px;
+      width: 100%;
       margin: 0 auto;
     }
 
@@ -48,7 +48,7 @@ template.innerHTML = `
 
     .board {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 16px;
       margin-top: 24px;
     }
@@ -94,12 +94,17 @@ template.innerHTML = `
     .task-content {
       margin-bottom: 4px;
     }
-    
+
     .task-problem {
       font-size: 12px;
       color: #666;
       font-style: italic;
     }
+
+    .task-problem-top {
+      margin-bottom: 4px;
+    }
+
 
     .actions {
       display: flex;
@@ -137,6 +142,10 @@ template.innerHTML = `
         <h3 class="column-header">To Do</h3>
         <div class="kanban-items"></div>
       </div>
+      <div class="column" data-column="Today">
+        <h3 class="column-header">Today</h3>
+        <div class="kanban-items"></div>
+      </div>
       <div class="column" data-column="In Progress">
         <h3 class="column-header">In Progress</h3>
         <div class="kanban-items"></div>
@@ -155,6 +164,13 @@ class KanbanBoard extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this.shadowRoot.appendChild(template.content.cloneNode(true));
     this.problems = [];
+    this.validColumns = {
+      'to do': 'To Do',
+      'todo': 'To Do',
+      'today': 'Today',
+      'in progress': 'In Progress',
+      'done': 'Done'
+    };
     
     this.initializeElements();
     this.initializeEventListeners();
@@ -228,15 +244,15 @@ class KanbanBoard extends HTMLElement {
     task.dataset.id = id;
     task.dataset.problem = problem;
 
+    const taskProblemTop = document.createElement('div');
+    taskProblemTop.className = 'task-problem task-problem-top';
+    taskProblemTop.textContent = `(${problem})`;
+    task.appendChild(taskProblemTop);
+
     const taskContent = document.createElement('div');
     taskContent.className = 'task-content';
     taskContent.textContent = content;
     task.appendChild(taskContent);
-    
-    const taskProblem = document.createElement('div');
-    taskProblem.className = 'task-problem';
-    taskProblem.textContent = `(${problem})`;
-    task.appendChild(taskProblem);
 
     task.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('text/plain', id);
@@ -340,7 +356,12 @@ class KanbanBoard extends HTMLElement {
 
   updateDropdown() {
     this.dropdown.innerHTML = '<option value="" disabled selected>Selecione uma Situação/Problema</option>';
-    this.problems.forEach(({ problem }) => {
+    
+    const sortedProblems = this.problems.sort((a, b) => 
+      a.problem.localeCompare(b.problem)
+    );
+
+    sortedProblems.forEach(({ problem }) => {
       const option = document.createElement('option');
       option.value = problem;
       option.textContent = problem;
@@ -371,14 +392,15 @@ class KanbanBoard extends HTMLElement {
 
   convertToCSV(data) {
     const headers = ['ID', 'Problem', 'Task', 'Result', 'Timestamp', 'Column'];
-    const rows = data.map(item => 
-      [item.id, item.problem, item.content, item.result, item.timestamp, item.column]
-    );
-    return [headers, ...rows].map(row => 
+    const rows = data.map(item => {
+      const normalizedColumn = this.normalizeColumn(item.column);
+      return [item.id, item.problem, item.content, item.result, item.timestamp, normalizedColumn];
+    });
+    return [headers, ...rows].map(row =>
       row.map(cell => {
         const cellStr = String(cell);
-        return cellStr.includes(';') || cellStr.includes('"') || cellStr.includes('\n') 
-          ? `"${cellStr.replace(/"/g, '""')}"` 
+        return cellStr.includes(';') || cellStr.includes('"') || cellStr.includes('\n')
+          ? `"${cellStr.replace(/"/g, '""')}"`
           : cellStr;
       }).join(';')
     ).join('\n');
@@ -423,6 +445,11 @@ class KanbanBoard extends HTMLElement {
     });
   }
 
+  normalizeColumn(column = '') {
+    const normalized = column.trim().toLowerCase();
+    return this.validColumns[normalized] || 'To Do';
+  }
+
   parseAndImportCSV(csvData) {
     const rows = csvData.split('\n').slice(1);
     const history = [];
@@ -451,21 +478,23 @@ class KanbanBoard extends HTMLElement {
         }
       }
       cells.push(currentCell);
-      
+
       const [id, problem, content, result, timestamp, column] = cells;
+      const cleanColumn = (column || '').replace(/^"|"$/g, '');
+      const normalizedColumn = this.normalizeColumn(cleanColumn);
       
       if (id && content && column) {
         const cleanContent = content.replace(/^"|"$/g, '');
         const cleanProblem = problem.replace(/^"|"$/g, '');
         const cleanResult = result.replace(/^"|"$/g, '');
-        
-        history.push({ 
-          id, 
-          problem: cleanProblem, 
-          content: cleanContent, 
-          result: cleanResult, 
-          timestamp, 
-          column 
+
+        history.push({
+          id,
+          problem: cleanProblem,
+          content: cleanContent,
+          result: cleanResult,
+          timestamp,
+          column: normalizedColumn
         });
         
         if (cleanProblem && !this.problems.find(p => p.problem === cleanProblem)) {
@@ -487,37 +516,68 @@ class KanbanBoard extends HTMLElement {
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStart = new Date(yesterday.setHours(0, 0, 0, 0));
     const yesterdayEnd = new Date(yesterday.setHours(23, 59, 59, 999));
-
+  
     const history = this.getTaskHistory();
+    const allTasks = this.getLatestTaskStates(history);
     
-    const yesterdayMoves = history.filter(entry => {
+    const yesterdayInProgress = history.filter(entry => {
       const entryDate = new Date(entry.timestamp);
       const isYesterday = entryDate >= yesterdayStart && entryDate <= yesterdayEnd;
-      const isValidColumn = entry.column === 'In Progress' || entry.column === 'Done';
-      return isYesterday && isValidColumn;
+      const isInProgress = entry.column === 'In Progress';
+      return isYesterday && isInProgress;
     });
-
-    const problemGroups = yesterdayMoves.reduce((acc, entry) => {
-      if (!acc[entry.problem]) {
-        acc[entry.problem] = new Set();
+  
+    const problemGroups = {};
+    
+    const uniqueProblems = new Set();
+    yesterdayInProgress.forEach(entry => uniqueProblems.add(entry.problem));
+    
+    uniqueProblems.forEach(problem => {
+      problemGroups[problem] = {
+        done: new Set(),
+        todo: new Set()
+      };
+    });
+    
+    yesterdayInProgress.forEach(entry => {
+      problemGroups[entry.problem].done.add(entry.content);
+    });
+    
+    Object.values(allTasks).forEach(task => {
+      if (task.column === 'To Do' && problemGroups[task.problem]) {
+        problemGroups[task.problem].todo.add(task.content);
       }
-      acc[entry.problem].add(entry.content);
-      return acc;
-    }, {});
-
+    });
+  
     let reportText = '';
     Object.entries(problemGroups).forEach(([problem, tasks]) => {
       reportText += `- ${problem}\n`;
-      tasks.forEach(task => {
-        reportText += `\t- ${task}\n`;
-      });
+      
+      reportText += `\t- O que foi feito?\n`;
+      if (tasks.done.size > 0) {
+        tasks.done.forEach(task => {
+          reportText += `\t\t- ${task}\n`;
+        });
+      } else {
+        reportText += `\t\t- Nenhuma tarefa concluída\n`;
+      }
+      
+      reportText += `\t- O que falta?\n`;
+      if (tasks.todo.size > 0) {
+        tasks.todo.forEach(task => {
+          reportText += `\t\t- ${task}\n`;
+        });
+      } else {
+        reportText += `\t\t- Nenhuma tarefa pendente\n`;
+      }
+      
       reportText += '\n';
     });
-
-    if (reportText.trim() === '') {
-      reportText = 'Nenhuma movimentação encontrada para o dia de ontem.';
+  
+    if (Object.keys(problemGroups).length === 0) {
+      reportText = 'Nenhuma atividade encontrada para o dia de ontem.';
     }
-
+  
     this.downloadTextFile(reportText, 'relatorio_ontem.txt');
   }
 
@@ -527,33 +587,64 @@ class KanbanBoard extends HTMLElement {
     const todayEnd = new Date(today.setHours(23, 59, 59, 999));
   
     const history = this.getTaskHistory();
+    const allTasks = this.getLatestTaskStates(history);
     
-    const todayMoves = history.filter(entry => {
+    const todayInProgress = history.filter(entry => {
       const entryDate = new Date(entry.timestamp);
       const isToday = entryDate >= todayStart && entryDate <= todayEnd;
       const isInProgress = entry.column === 'In Progress';
       return isToday && isInProgress;
     });
   
-    const problemGroups = todayMoves.reduce((acc, entry) => {
-      if (!acc[entry.problem]) {
-        acc[entry.problem] = new Set();
+    const problemGroups = {};
+    
+    const uniqueProblems = new Set();
+    todayInProgress.forEach(entry => uniqueProblems.add(entry.problem));
+    
+    uniqueProblems.forEach(problem => {
+      problemGroups[problem] = {
+        done: new Set(),
+        todo: new Set()
+      };
+    });
+    
+    todayInProgress.forEach(entry => {
+      problemGroups[entry.problem].done.add(entry.content);
+    });
+    
+    Object.values(allTasks).forEach(task => {
+      if (task.column === 'To Do' && problemGroups[task.problem]) {
+        problemGroups[task.problem].todo.add(task.content);
       }
-      acc[entry.problem].add(entry.content);
-      return acc;
-    }, {});
+    });
   
     let reportText = '';
     Object.entries(problemGroups).forEach(([problem, tasks]) => {
       reportText += `- ${problem}\n`;
-      tasks.forEach(task => {
-        reportText += `\t- ${task}\n`;
-      });
+      
+      reportText += `\t- O que foi feito?\n`;
+      if (tasks.done.size > 0) {
+        tasks.done.forEach(task => {
+          reportText += `\t\t- ${task}\n`;
+        });
+      } else {
+        reportText += `\t\t- Nenhuma tarefa concluída\n`;
+      }
+      
+      reportText += `\t- O que falta?\n`;
+      if (tasks.todo.size > 0) {
+        tasks.todo.forEach(task => {
+          reportText += `\t\t- ${task}\n`;
+        });
+      } else {
+        reportText += `\t\t- Nenhuma tarefa pendente\n`;
+      }
+      
       reportText += '\n';
     });
   
-    if (reportText.trim() === '') {
-      reportText = 'Nenhuma movimentação encontrada para hoje.';
+    if (Object.keys(problemGroups).length === 0) {
+      reportText = 'Nenhuma atividade encontrada para hoje.';
     }
   
     this.downloadTextFile(reportText, 'atividades_hoje.txt');
