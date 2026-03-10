@@ -29,6 +29,8 @@ template.innerHTML = `
       font-size: 14px;
       flex: 1;
       min-width: 200px;
+      resize: vertical;
+      font-family: inherit;
     }
 
     .button {
@@ -93,16 +95,31 @@ template.innerHTML = `
     
     .task-content {
       margin-bottom: 4px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
     .task-problem {
       font-size: 12px;
       color: #666;
       font-style: italic;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
     .task-problem-top {
       margin-bottom: 4px;
+    }
+
+    .task-pomodoro {
+      margin-top: 8px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #fff8c5;
+      color: #7a4e00;
+      width: fit-content;
     }
 
 
@@ -110,6 +127,15 @@ template.innerHTML = `
       display: flex;
       gap: 8px;
       margin: 16px 0;
+      flex-wrap: wrap;
+    }
+
+    .button.active {
+      background-color: #2da44e;
+    }
+
+    .button.active:hover {
+      background-color: #22863a;
     }
   </style>
 
@@ -121,7 +147,7 @@ template.innerHTML = `
     </div>
 
     <div class="form-group">
-      <input type="text" id="taskInput" class="input-field" placeholder="Nova Tarefa" />
+      <textarea id="taskInput" class="input-field" placeholder="Nova Tarefa" rows="2"></textarea>
       <select id="situationDropdown" class="input-field">
         <option value="" disabled selected>Selecione uma Situação</option>
       </select>
@@ -135,6 +161,7 @@ template.innerHTML = `
       <button id="exportTimeTracking" class="button">Exportar Tempo de Tarefas</button>
       <button id="exportDailyReport" class="button">Relatório de Ontem</button>
       <button id="exportTodayReport" class="button">Relatório de Hoje</button> 
+      <button id="togglePomodoro" class="button">Pomodoro: Desativado</button>
     </div>
 
     <div class="board">
@@ -173,6 +200,8 @@ class KanbanBoard extends HTMLElement {
     };
     
     this.initializeElements();
+    this.pomodoroEnabled = this.getPomodoroState();
+    this.pomodoroTimers = new Map();
     this.initializeEventListeners();
     this.loadInitialState();
   }
@@ -181,6 +210,7 @@ class KanbanBoard extends HTMLElement {
     this.board = this.shadowRoot.querySelector('.board');
     this.dropdown = this.shadowRoot.getElementById('situationDropdown');
     this.importCsvInput = this.shadowRoot.getElementById('importCsv');
+    this.togglePomodoroButton = this.shadowRoot.getElementById('togglePomodoro');
   }
 
   initializeEventListeners() {
@@ -191,7 +221,10 @@ class KanbanBoard extends HTMLElement {
     this.shadowRoot.getElementById('exportTimeTracking').addEventListener('click', () => this.handleExportTimeTracking());
     this.shadowRoot.getElementById('exportDailyReport').addEventListener('click', () => this.handleExportDailyReport());
     this.shadowRoot.getElementById('exportTodayReport').addEventListener('click', () => this.handleExportTodayReport());
+    this.togglePomodoroButton.addEventListener('click', () => this.handleTogglePomodoro());
     this.importCsvInput.addEventListener('change', (e) => this.handleImportCsv(e));
+
+    this.updatePomodoroButtonLabel();
     
     this.initializeDragAndDrop();
   }
@@ -254,6 +287,11 @@ class KanbanBoard extends HTMLElement {
     taskContent.textContent = content;
     task.appendChild(taskContent);
 
+    const pomodoroCountdown = document.createElement('div');
+    pomodoroCountdown.className = 'task-pomodoro';
+    pomodoroCountdown.hidden = true;
+    task.appendChild(pomodoroCountdown);
+
     task.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('text/plain', id);
       task.classList.add('dragging');
@@ -278,6 +316,18 @@ class KanbanBoard extends HTMLElement {
     const oldColumn = task.parentElement.closest('.column').dataset.column;
 
     if (newColumn !== oldColumn) {
+      if (newColumn === 'In Progress' && this.pomodoroEnabled) {
+        const selectedMinutes = this.showPomodoroSelection();
+
+        if (!selectedMinutes) {
+          return;
+        }
+
+        this.startPomodoroTimer(task, selectedMinutes);
+      } else if (oldColumn === 'In Progress' && newColumn !== 'In Progress') {
+        this.clearPomodoroTimer(taskId);
+      }
+
       const targetContainer = targetColumn.querySelector('.kanban-items');
       const firstTask = targetContainer.firstChild;
       targetContainer.insertBefore(task, firstTask);
@@ -451,33 +501,11 @@ class KanbanBoard extends HTMLElement {
   }
 
   parseAndImportCSV(csvData) {
-    const rows = csvData.split('\n').slice(1);
+    const rows = this.parseCSVRows(csvData).slice(1);
     const history = [];
     this.problems = [];
 
-    rows.forEach(row => {
-      const cells = [];
-      let currentCell = '';
-      let insideQuotes = false;
-      
-      for (let i = 0; i < row.length; i++) {
-        const char = row[i];
-        
-        if (char === '"') {
-          if (insideQuotes && row[i + 1] === '"') {
-            currentCell += '"';
-            i++;
-          } else {
-            insideQuotes = !insideQuotes;
-          }
-        } else if (char === ';' && !insideQuotes) {
-          cells.push(currentCell);
-          currentCell = '';
-        } else {
-          currentCell += char;
-        }
-      }
-      cells.push(currentCell);
+    rows.forEach(cells => {
 
       const [id, problem, content, result, timestamp, column] = cells;
       const cleanColumn = (column || '').replace(/^"|"$/g, '');
@@ -509,6 +537,60 @@ class KanbanBoard extends HTMLElement {
     localStorage.setItem('taskHistory', JSON.stringify(history));
     this.updateDropdown();
     this.reloadTasks();
+  }
+
+  parseCSVRows(csvData) {
+    const rows = [];
+    let currentRow = [];
+    let currentCell = '';
+    let insideQuotes = false;
+
+    for (let i = 0; i < csvData.length; i++) {
+      const char = csvData[i];
+
+      if (char === '"') {
+        if (insideQuotes && csvData[i + 1] === '"') {
+          currentCell += '"';
+          i++;
+        } else {
+          insideQuotes = !insideQuotes;
+        }
+        continue;
+      }
+
+      if (char === ';' && !insideQuotes) {
+        currentRow.push(currentCell);
+        currentCell = '';
+        continue;
+      }
+
+      if ((char === '\n' || char === '\r') && !insideQuotes) {
+        if (char === '\r' && csvData[i + 1] === '\n') {
+          i++;
+        }
+
+        currentRow.push(currentCell);
+        currentCell = '';
+
+        if (currentRow.length > 1 || currentRow[0]) {
+          rows.push(currentRow);
+        }
+
+        currentRow = [];
+        continue;
+      }
+
+      currentCell += char;
+    }
+
+    if (currentCell || currentRow.length) {
+      currentRow.push(currentCell);
+      if (currentRow.length > 1 || currentRow[0]) {
+        rows.push(currentRow);
+      }
+    }
+
+    return rows;
   }
 
   handleExportDailyReport() {
@@ -698,6 +780,136 @@ class KanbanBoard extends HTMLElement {
 
   clearInputs(inputs) {
     inputs.forEach(input => input.value = '');
+  }
+
+  getPomodoroState() {
+    return localStorage.getItem('pomodoroEnabled') === 'true';
+  }
+
+  handleTogglePomodoro() {
+    this.pomodoroEnabled = !this.pomodoroEnabled;
+    localStorage.setItem('pomodoroEnabled', String(this.pomodoroEnabled));
+    this.updatePomodoroButtonLabel();
+  }
+
+  updatePomodoroButtonLabel() {
+    this.togglePomodoroButton.textContent = this.pomodoroEnabled ? 'Pomodoro: Ativado' : 'Pomodoro: Desativado';
+    this.togglePomodoroButton.classList.toggle('active', this.pomodoroEnabled);
+  }
+
+  showPomodoroSelection() {
+    const options = ['5', '10', '15', '20', '30', '40', '50', '60'];
+    const choice = prompt(`Pomodoro ativo! Escolha o timer em minutos:\n${options.join(', ')}`);
+
+    if (!choice) {
+      return null;
+    }
+
+    const selected = Number(choice.trim());
+
+    if (!options.includes(String(selected))) {
+      this.showError('Seleção inválida. Escolha um tempo entre: 5, 10, 15, 20, 30, 40, 50 ou 60.');
+      return null;
+    }
+
+    return selected;
+  }
+
+  startPomodoroTimer(taskElement, selectedMinutes) {
+    const taskId = taskElement.dataset.id;
+    this.clearPomodoroTimer(taskId);
+
+    const durationMs = selectedMinutes * 60 * 1000;
+    const endTime = Date.now() + durationMs;
+    const countdownElement = taskElement.querySelector('.task-pomodoro');
+
+    this.updatePomodoroCountdown(countdownElement, endTime);
+    countdownElement.hidden = false;
+
+    const intervalId = setInterval(() => {
+      this.updatePomodoroCountdown(countdownElement, endTime);
+    }, 1000);
+
+    const timeoutId = setTimeout(() => {
+      this.handlePomodoroCompleted(taskId);
+    }, durationMs);
+
+    this.pomodoroTimers.set(taskId, { timeoutId, intervalId });
+  }
+
+  clearPomodoroTimer(taskId) {
+    const timerData = this.pomodoroTimers.get(taskId);
+    if (!timerData) {
+      return;
+    }
+
+    clearTimeout(timerData.timeoutId);
+    clearInterval(timerData.intervalId);
+    this.pomodoroTimers.delete(taskId);
+
+    const task = this.shadowRoot.querySelector(`.task[data-id="${taskId}"]`);
+    if (!task) {
+      return;
+    }
+
+    const countdownElement = task.querySelector('.task-pomodoro');
+    if (countdownElement) {
+      countdownElement.hidden = true;
+      countdownElement.textContent = '';
+    }
+  }
+
+  updatePomodoroCountdown(countdownElement, endTime) {
+    if (!countdownElement) {
+      return;
+    }
+
+    const remainingMs = Math.max(0, endTime - Date.now());
+    const remainingSeconds = Math.ceil(remainingMs / 1000);
+    const minutes = Math.floor(remainingSeconds / 60);
+    const seconds = remainingSeconds % 60;
+    countdownElement.textContent = `⏳ Pomodoro: ${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  handlePomodoroCompleted(taskId) {
+    this.clearPomodoroTimer(taskId);
+
+    const task = this.shadowRoot.querySelector(`.task[data-id="${taskId}"]`);
+    if (!task) {
+      return;
+    }
+
+    const currentColumn = task.parentElement.closest('.column').dataset.column;
+    if (currentColumn !== 'In Progress') {
+      return;
+    }
+
+    const todayColumn = this.shadowRoot.querySelector('[data-column="Today"] .kanban-items');
+    todayColumn.insertBefore(task, todayColumn.firstChild);
+
+    const content = task.querySelector('.task-content').textContent;
+    this.logTaskChange(taskId, content, 'Today', task.dataset.problem);
+    this.playPomodoroAlert();
+    alert('Tempo do Pomodoro finalizado! A tarefa voltou para a coluna Today.');
+  }
+
+  playPomodoroAlert() {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    oscillator.type = 'sine';
+    oscillator.frequency.value = 880;
+    gainNode.gain.value = 0.08;
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    oscillator.start();
+    setTimeout(() => {
+      oscillator.stop();
+      audioContext.close();
+    }, 400);
   }
 
   showError(message) {
