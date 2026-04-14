@@ -334,6 +334,7 @@ class KanbanBoard extends HTMLElement {
       
       const content = task.querySelector('.task-content').textContent;
       this.logTaskChange(taskId, content, newColumn, task.dataset.problem);
+      this.updateDropdown();
     }
   }
 
@@ -406,10 +407,27 @@ class KanbanBoard extends HTMLElement {
 
   updateDropdown() {
     this.dropdown.innerHTML = '<option value="" disabled selected>Selecione uma Situação/Problema</option>';
-    
-    const sortedProblems = this.problems.sort((a, b) => 
-      a.problem.localeCompare(b.problem)
-    );
+
+    const history = this.getTaskHistory();
+    const latestTasks = this.getLatestTaskStates(history);
+    const hasTasksByProblem = new Map();
+    const hasNonDoneTasksByProblem = new Map();
+
+    Object.values(latestTasks).forEach(({ problem, column }) => {
+      if (!problem) return;
+      hasTasksByProblem.set(problem, true);
+      if (column !== 'Done') {
+        hasNonDoneTasksByProblem.set(problem, true);
+      }
+    });
+
+    const sortedProblems = this.problems
+      .filter(({ problem }) => {
+        const hasTasks = hasTasksByProblem.get(problem) === true;
+        const hasNonDoneTasks = hasNonDoneTasksByProblem.get(problem) === true;
+        return !hasTasks || hasNonDoneTasks;
+      })
+      .sort((a, b) => a.problem.localeCompare(b.problem));
 
     sortedProblems.forEach(({ problem }) => {
       const option = document.createElement('option');
